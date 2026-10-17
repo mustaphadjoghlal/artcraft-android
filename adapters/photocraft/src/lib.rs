@@ -34,6 +34,11 @@ mod ime_bridge;
 /// including the Android modifier-key fix and immersive fullscreen — is the one that is running.
 const ANDROID_SHELL_MARKER: &str = "ARTCRAFT_PHOTOCRAFT_ANDROID_SHELL_V2_MODIFIERS_FULLSCREEN";
 
+/// Phone-screen UI scale. PhotoCraft's egui layout is designed for desktop windows, so at the
+/// device's native density it is too large and its edges are clipped. egui multiplies the native
+/// pixels-per-point by this factor: lower it to fit more on screen, raise it to enlarge the UI.
+const PHONE_UI_ZOOM: f32 = 0.65;
+
 struct AndroidFileBridge {
     app: AndroidApp,
     vm: Arc<JavaVM>,
@@ -631,6 +636,7 @@ fn android_main(android_app: AndroidApp) {
         options,
         Box::new(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, photocraft_ui_egui::theme::ThemeKind::Pro);
+            cc.egui_ctx.set_zoom_factor(PHONE_UI_ZOOM);
             let app = PhotocraftApp::new(
                 Session::new(),
                 services(
