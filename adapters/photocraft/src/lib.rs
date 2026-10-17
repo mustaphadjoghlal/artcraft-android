@@ -11,6 +11,7 @@ use jni::{
 };
 use photocraft_codecs::{ChannelLayout, EncodeOptions, Image};
 use photocraft_doc::Document;
+use photocraft_engine::prefs::UiScale;
 use photocraft_engine::Session;
 use photocraft_ui_egui::{
     FileDialogAnswer, FileDialogReply, FileDialogRequest, Inbox, PhotocraftApp, Services,
@@ -34,11 +35,24 @@ mod ime_bridge;
 /// including the Android modifier-key fix and immersive fullscreen — is the one that is running.
 const ANDROID_SHELL_MARKER: &str = "ARTCRAFT_PHOTOCRAFT_ANDROID_SHELL_V2_MODIFIERS_FULLSCREEN";
 
-/// The UI starts at its normal size. Two floating buttons zoom the whole interface in and out
-/// (egui's zoom factor) so it can be fitted to a phone screen by hand.
-const UI_ZOOM_STEP: f32 = 1.1;
-const UI_ZOOM_MIN: f32 = 0.3;
-const UI_ZOOM_MAX: f32 = 3.0;
+/// PhotoCraft re-applies its own `Interface > UI Scale` preference to egui every frame, so the
+/// floating +/- buttons step that preference instead of fighting it. `Auto` follows the phone's
+/// density (the normal, large size); each step down fits more of the interface on screen.
+const UI_SCALE_LADDER: [UiScale; 13] = [
+    UiScale::P75,
+    UiScale::P80,
+    UiScale::P85,
+    UiScale::P90,
+    UiScale::P95,
+    UiScale::P100,
+    UiScale::P125,
+    UiScale::P150,
+    UiScale::P175,
+    UiScale::P200,
+    UiScale::P250,
+    UiScale::P300,
+    UiScale::Auto,
+];
 
 struct AndroidFileBridge {
     app: AndroidApp,
@@ -539,8 +553,6 @@ struct PhotoCraftAndroidApp {
     // finished its own start-up, and goes negative (stop polling) if the host has no intent bridge.
     intent_inbox: Inbox,
     intent_warmup: i64,
-    // Current whole-UI zoom, changed by the floating +/- buttons.
-    ui_zoom: f32,
 }
 
 /// Read the files the system asked this app to open (an `ACTION_VIEW`/`ACTION_SEND` it is registered
@@ -578,9 +590,21 @@ fn drain_incoming(bridge: &AndroidFileBridge, inbox: &Inbox, warmup: &mut i64) {
 }
 
 impl PhotoCraftAndroidApp {
+    /// Move the app's UI Scale preference one step along `UI_SCALE_LADDER`.
+    fn step_ui_scale(&mut self, up: bool) {
+        let current = self.inner.session.prefs().interface.ui_scale;
+        let last = UI_SCALE_LADDER.len() - 1;
+        let idx = UI_SCALE_LADDER.iter().position(|s| *s == current).unwrap_or(last);
+        let next = if up { (idx + 1).min(last) } else { idx.saturating_sub(1) };
+        if next != idx {
+            let target = UI_SCALE_LADDER[next];
+            self.inner.session.edit_prefs(|p| p.interface.ui_scale = target);
+        }
+    }
+
     /// Floating zoom out / zoom in buttons in the bottom-right corner.
     fn zoom_buttons(&mut self, ctx: &egui::Context) {
-        let mut zoom = self.ui_zoom;
+        let mut step: Option<bool> = None;
         egui::Area::new(egui::Id::new("artcraft_ui_zoom"))
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -56.0))
@@ -590,17 +614,17 @@ impl PhotoCraftAndroidApp {
                     let out = egui::Button::new(egui::RichText::new("\u{2212}").size(24.0))
                         .min_size(size);
                     if ui.add(out).clicked() {
-                        zoom = (zoom / UI_ZOOM_STEP).max(UI_ZOOM_MIN);
+                        step = Some(false);
                     }
                     let inn = egui::Button::new(egui::RichText::new("+").size(24.0)).min_size(size);
                     if ui.add(inn).clicked() {
-                        zoom = (zoom * UI_ZOOM_STEP).min(UI_ZOOM_MAX);
+                        step = Some(true);
                     }
                 });
             });
-        if (zoom - self.ui_zoom).abs() > f32::EPSILON {
-            self.ui_zoom = zoom;
-            ctx.set_zoom_factor(zoom);
+        if let Some(up) = step {
+            self.step_ui_scale(up);
+            ctx.request_repaint();
         }
     }
 }
@@ -685,7 +709,6 @@ fn android_main(android_app: AndroidApp) {
                 modifiers: egui::Modifiers::default(),
                 intent_inbox: app_intent_inbox.clone(),
                 intent_warmup: 2,
-                ui_zoom: 1.0,
             }))
         }),
     );
