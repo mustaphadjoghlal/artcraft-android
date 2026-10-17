@@ -1,0 +1,94 @@
+name: Build APK
+
+on:
+  workflow_dispatch:
+    inputs:
+      app:
+        description: "App to build (photocraft, vectorcraft, filmcraft, ...)"
+        required: true
+        default: photocraft
+      publish:
+        description: "Also publish the APK as a GitHub pre-release"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      ARTCRAFT_TARGET_SDK: "35"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Android SDK pieces
+        run: |
+          SDKMANAGER="$(command -v sdkmanager || echo "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager")"
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          echo "ARTCRAFT_BUILD_TOOLS_VERSION=35.0.0" >> "$GITHUB_ENV"
+
+      - name: Install Rust target
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+
+      - name: Cache Cargo tools and registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ runner.os }}-${{ inputs.app }}-v1
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      # Keeps the same signing key between builds so a new APK can update the installed one.
+      - name: Restore signing keystore
+        uses: actions/cache@v4
+        with:
+          path: keys
+          key: artcraft-keystore-v1
+
+      - name: Build ${{ inputs.app }}
+        run: bash build.sh -${{ inputs.app }}
+
+      - name: Collect APK
+        id: apk
+        run: |
+          ls -la output
+          APK="$(ls -t output/*.apk | head -n 1)"
+          echo "path=$APK" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$APK")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.app }}-apk
+          path: ${{ steps.apk.outputs.path }}
+          if-no-files-found: error
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs/
+          if-no-files-found: ignore
+
+      - name: Publish pre-release
+        if: ${{ inputs.publish }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ inputs.app }}-build-${{ github.run_number }}"
+          gh release create "$TAG" "${{ steps.apk.outputs.path }}" \
+            --prerelease \
+            --title "${{ inputs.app }} build ${{ github.run_number }}" \
+            --notes "Built from ${GITHUB_SHA::7} with the phone UI zoom adapter."
