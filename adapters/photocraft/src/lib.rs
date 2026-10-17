@@ -34,10 +34,31 @@ mod ime_bridge;
 /// including the Android modifier-key fix and immersive fullscreen — is the one that is running.
 const ANDROID_SHELL_MARKER: &str = "ARTCRAFT_PHOTOCRAFT_ANDROID_SHELL_V2_MODIFIERS_FULLSCREEN";
 
-/// Phone-screen UI scale. PhotoCraft's egui layout is designed for desktop windows, so at the
-/// device's native density it is too large and its edges are clipped. egui multiplies the native
-/// pixels-per-point by this factor: lower it to fit more on screen, raise it to enlarge the UI.
-const PHONE_UI_ZOOM: f32 = 0.65;
+/// Phone-screen UI scale. PhotoCraft's egui layout is designed for desktop windows (it needs
+/// roughly a thousand points of width for its menu bar and dialogs), so at the device's native
+/// density it is too large and its edges are clipped. The zoom factor is chosen from the real
+/// screen width so the UI always gets about `PHONE_TARGET_WIDTH_PT` logical points of width,
+/// and follows rotation. Raise the target for a smaller, roomier layout; lower it for bigger text.
+const PHONE_TARGET_WIDTH_PT: f32 = 1000.0;
+/// The UI is never zoomed out further than this, even on very narrow screens.
+const PHONE_MIN_ZOOM: f32 = 0.3;
+
+/// Pick the zoom factor that gives the UI `PHONE_TARGET_WIDTH_PT` points of width on this screen.
+fn apply_phone_zoom(ctx: &egui::Context, raw: &egui::RawInput) {
+    let Some(rect) = raw.screen_rect else { return };
+    let ppp = ctx.pixels_per_point();
+    let native = ctx
+        .native_pixels_per_point()
+        .unwrap_or(ppp / ctx.zoom_factor());
+    let physical_width = rect.width() * ppp;
+    if physical_width <= 0.0 || native <= 0.0 {
+        return;
+    }
+    let zoom = (physical_width / (native * PHONE_TARGET_WIDTH_PT)).clamp(PHONE_MIN_ZOOM, 1.0);
+    if (ctx.zoom_factor() - zoom).abs() > 0.01 {
+        ctx.set_zoom_factor(zoom);
+    }
+}
 
 struct AndroidFileBridge {
     app: AndroidApp,
@@ -590,6 +611,7 @@ impl eframe::App for PhotoCraftAndroidApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         self.ime.poll(raw);
         apply_android_modifiers(&mut self.modifiers, raw);
+        apply_phone_zoom(ctx, raw);
         self.inner.raw_input_hook(ctx, raw);
     }
 }
@@ -636,7 +658,7 @@ fn android_main(android_app: AndroidApp) {
         options,
         Box::new(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, photocraft_ui_egui::theme::ThemeKind::Pro);
-            cc.egui_ctx.set_zoom_factor(PHONE_UI_ZOOM);
+            cc.egui_ctx.set_zoom_factor(0.4);
             let app = PhotocraftApp::new(
                 Session::new(),
                 services(
