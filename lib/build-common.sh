@@ -311,6 +311,23 @@ if fixed:
     print(f"  Repaired upstream compile errors still present in {title}: {', '.join(fixed)}")
 PY
 
+# Phone-layout patches for the app's own source live in patches/<app>/*.patch. Each one is applied
+# only when it still applies cleanly; one that is already applied, or that no longer matches a newer
+# upstream, is skipped with a notice and never stops the build.
+if [[ -d "$ROOT/patches/$APP" ]]; then
+    for patch in "$ROOT/patches/$APP"/*.patch; do
+        [[ -f "$patch" ]] || continue
+        name="$(basename "$patch")"
+        if git -C "$SRC" apply --check "$patch" >/dev/null 2>&1; then
+            git -C "$SRC" apply "$patch" && echo "Applied patch: $name"
+        elif git -C "$SRC" apply --reverse --check "$patch" >/dev/null 2>&1; then
+            echo "Patch already applied: $name"
+        else
+            echo "WARNING: patch $name does not apply to this source; skipped." >&2
+        fi
+    done
+fi
+
 say 4 "Preparing the NativeActivity launcher..."
 if [[ -x "adapters/$APP/prepare.sh" ]]; then
     echo "Using app-specific adapter: adapters/$APP/prepare.sh"

@@ -8,6 +8,7 @@ on:
       - "lib/**"
       - "templates/**"
       - "vendor/**"
+      - "patches/**"
   workflow_dispatch:
     inputs:
       app:

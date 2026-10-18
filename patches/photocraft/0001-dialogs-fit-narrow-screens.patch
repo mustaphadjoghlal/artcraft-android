@@ -1,0 +1,104 @@
+diff --git a/crates/ui-egui/src/dialogs.rs b/crates/ui-egui/src/dialogs.rs
+index 43b4f3d3..8510fee4 100644
+--- a/crates/ui-egui/src/dialogs.rs
++++ b/crates/ui-egui/src/dialogs.rs
+@@ -108,6 +108,9 @@ fn resizable_dialog(fields: &serde_json::Map<String, Value>) -> bool {
+     fields.contains_key("__web") || crate::prefs_ui::is_preferences(fields)
+ }
+ 
++/// Screens narrower than this (in points) get dialogs held to the screen width.
++const PHONE_DIALOG_SCREEN_WIDTH: f32 = 700.0;
++
+ fn show_modal<T>(
+     modal: egui::Modal,
+     ctx: &egui::Context,
+@@ -121,14 +124,27 @@ fn show_modal<T>(
+         if !interactive {
+             ui.disable();
+         }
++        let screen = ctx.content_rect();
+         if resizable {
+-            let max = (ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(560.0, 400.0));
++            // A phone-width screen is narrower than the usual 560 pt minimum.
++            let floor = egui::vec2(560.0_f32.min(screen.width() - 40.0).max(240.0), 400.0_f32.min(screen.height() - 40.0).max(200.0));
++            let max = (screen.size() - egui::vec2(40.0, 40.0)).max(floor);
+             egui::Resize::default()
+                 .id(id.with("resize"))
+                 .default_size(egui::vec2(960.0, 900.0).min(max))
+-                .min_size(egui::vec2(560.0, 400.0))
++                .min_size(floor)
+                 .max_size(max)
+                 .show(ui, contents)
++        } else if screen.width() < PHONE_DIALOG_SCREEN_WIDTH {
++            // Phone-width screen: the dialog never outgrows the screen. Anything wider or taller
++            // than what is left scrolls (drag), instead of running off the edge.
++            egui::ScrollArea::both()
++                .id_salt(id.with("phone-scroll"))
++                .max_width((screen.width() - 40.0).max(240.0))
++                .max_height((screen.height() - 40.0).max(200.0))
++                .auto_shrink([true, true])
++                .show(ui, contents)
++                .inner
+         } else {
+             contents(ui)
+         }
+@@ -213,22 +229,24 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+             // A dialog of a few short fields (`__compact`, Fit Image) is narrower (#4673): the title
+             // rule and the button row fill the width they are given, so it needs its own maximum too.
+             let compact = d.fields.contains_key("__compact");
++            // Widest a dialog may be on this screen (a no-op on a desktop-size window).
++            let cap = (ctx.content_rect().width() - 56.0).max(240.0);
+             // The curve editor caps its graph allocation at 300 points (#5113).
+             let curves = fields.get("__adjust").and_then(Value::as_str) == Some("curves");
+             if !compact {
+-                ui.set_min_width(if curves { 300.0 } else { 380.0 });
++                ui.set_min_width((if curves { 300.0_f32 } else { 380.0 }).min(cap));
+             }
+             let wide = crate::prefs_ui::width(&d.fields, (ctx.content_rect().width() - 48.0).max(380.0));
+             if let Some(w) = wide {
+-                ui.set_min_width(w.min(460.0));
++                ui.set_min_width(w.min(460.0).min(cap));
+             }
+             if d.kind == DialogKind::NewDocument {
+-                ui.set_min_width(800.0);
++                ui.set_min_width(800.0_f32.min(cap));
+             }
+             // The About window: room for the contributor table, the same width on every tab.
+             let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
+             if about_tabs {
+-                ui.set_min_width(700.0);
++                ui.set_min_width(700.0_f32.min(cap));
+             }
+             ui.set_max_width(wide.unwrap_or(if d.kind == DialogKind::NewDocument {
+                 800.0
+@@ -242,22 +260,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
+                 300.0
+             } else {
+                 440.0
+-            }));
++            }).min(cap));
+             if web {
+-                ui.set_max_width(available.x);
+-                ui.set_min_size(available);
++                ui.set_max_width(available.x.min(cap));
++                ui.set_min_size(egui::vec2(available.x.min(cap), available.y));
+             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
+-                ui.set_min_width(w);
+-                ui.set_max_width(w);
++                ui.set_min_width(w.min(cap));
++                ui.set_max_width(w.min(cap));
+             }
+             // Duplicate Layer… is a fixed small grid (labels + 260 pt fields ≈ 352 pt):
+             // the generic 380 pt minimum left a dead strip on its right.
+             if crate::duplicate_layer_ui::owns(&d.fields) {
+-                ui.set_min_width(360.0);
+-                ui.set_max_width(360.0);
++                ui.set_min_width(360.0_f32.min(cap));
++                ui.set_max_width(360.0_f32.min(cap));
+             }
+             if color_picker {
+-                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
++                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH.min(cap));
+             }
+             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
+             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
