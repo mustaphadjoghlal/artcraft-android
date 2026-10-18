@@ -589,6 +589,24 @@ fn drain_incoming(bridge: &AndroidFileBridge, inbox: &Inbox, warmup: &mut i64) {
     }
 }
 
+/// Phone-friendly defaults, applied once per install (a marker file records that they were
+/// applied, so the user's own later choices are never overwritten). PhotoCraft's `Auto` UI scale
+/// follows the phone's density, which is far too large for its desktop-style menu bar; 200% gives
+/// the whole menu bar and tool strips room, like Photopea on a phone. Iconic panels open as a peek
+/// and close again when tapping outside them.
+fn apply_phone_defaults(app: &mut PhotocraftApp, marker: &Path) {
+    if marker.exists() {
+        return;
+    }
+    app.session.edit_prefs(|p| {
+        p.interface.ui_scale = UiScale::P200;
+        p.workspace.auto_collapse_icon_panels = true;
+    });
+    if let Err(error) = fs::write(marker, b"1") {
+        log::warn!("Could not record the phone defaults marker: {error}");
+    }
+}
+
 impl PhotoCraftAndroidApp {
     /// Move the app's UI Scale preference one step along `UI_SCALE_LADDER`.
     fn step_ui_scale(&mut self, up: bool) {
@@ -670,6 +688,7 @@ fn android_main(android_app: AndroidApp) {
         }
     };
     let prefs_path = files_dir.join("PhotoCraft").join("preferences.json");
+    let defaults_marker = files_dir.join("PhotoCraft").join("phone-defaults-v1");
     if let Some(parent) = prefs_path.parent() {
         if let Err(error) = fs::create_dir_all(parent) {
             log::error!("Could not create preferences directory: {error}");
@@ -692,7 +711,7 @@ fn android_main(android_app: AndroidApp) {
         options,
         Box::new(move |cc| {
             PhotocraftApp::setup_context(&cc.egui_ctx, photocraft_ui_egui::theme::ThemeKind::Pro);
-            let app = PhotocraftApp::new(
+            let mut app = PhotocraftApp::new(
                 Session::new(),
                 services(
                     app_bridge.clone_for_services(),
@@ -701,6 +720,7 @@ fn android_main(android_app: AndroidApp) {
                     app_intent_inbox.clone(),
                 ),
             );
+            apply_phone_defaults(&mut app, &defaults_marker);
             Ok(Box::new(PhotoCraftAndroidApp {
                 inner: app,
                 bridge: app_bridge.clone_for_services(),
